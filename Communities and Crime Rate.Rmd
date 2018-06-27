@@ -1,0 +1,278 @@
+---
+title: "Communities and Crime Rate"
+author: "Brendan Dagys"
+date: "6/27/2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Import and Cleaning
+
+```{r, message = FALSE}
+library(corrplot)
+library(caret)
+library(rpart); library(party)
+library(randomForest)
+library(sqldf)
+library(dplyr)
+library(e1071)
+library(neuralnet)
+```
+
+Column names to make the data frame more readable:
+
+```{r}
+columns = c('state', 'county', 'community_int', 'community', 'fold', 'population', 'household_size', 'pct_black', 'pct_white',
+            'pct_asian', 'pct_hispanic', 'age_12-21', 'age_12-29', 'age_16-24', 'age_65+', 'num_urban', 'pct_urban', 'med_income',
+            'pct_with_wage', 'pct_with_farm', 'pct_with_invest', 'pct_with_ss', 'pct_with_pub_assist', 'pct_with_retire_inc',
+            'med_family_inc', 'per_cap_inc', 'white_per_cap_inc', 'black_per_cap_inc', 'indian_per_cap_inc', 'asian_per_cap_inc',
+            'other_per_cap_inc', 'hisp_per_cap_inc', 'num_under_pov', 'pct_pop_under_pov', 'pct_less_9th_gr', 'pct_no_hs', 'pct_with_bach',
+            'pct_unemp', 'pct_employ', 'pct_employ_manuf', 'pct_employ_prof', 'pct_employ_manuf', 'pct_employ_mgmt', 'pct_males_div',
+            'pct_male_never_marr', 'pct_fem_div', 'pct_pop_div', 'ppl_per_family', 'pct_fam_2_parents', 'pct_kids_2_parents',
+            'pct_kids<4_2_parents', 'pct_teens_2_parents', 'pct_work_mom_young_kids', 'pct_work_mom_kids', 'num_kids_to_unmarried',
+            'pct_kids_to_unmarried', 'num_foreign_born', 'pct_immig_3_years', 'pct_immig_5_years', 'pct_immig_8_years', 'pct_immig_10_years',
+            'pct_pop_immig_3_years', 'pct_pop_immig_5_years', 'pct_pop_immig_8_years', 'pct_pop_immig_10_years', 'pct_only_english',
+            'pct_ESL', 'pct_large_household', 'pct_large_household', 'ppl_per_house', 'ppl_per_owner_occ_house', 'ppl_per_rented_house',
+            'pct_ppl_in_owned_house', 'pct_ppl_dense_housing', 'pct_houses_less_3_bedrooms', 'med_num_bedrooms', 'num_vacant_households',
+            'pct_houses_occ', 'pct_houses_owner_occ', 'pct_vacant_boarded', 'pct_vacant>6months', 'med_year_houses_built', 'pct_houses_no_phone',
+            'pct_houses_no_plumb', 'owner_occ_low_quartile', 'owner_occ_med_quartile', 'owner_occ_high_quartile', 'rental_low_quartile',
+            'rental_med_quartile', 'rental_high_quartile', 'med_rent', 'med_rent/income', 'med_owner_cost/income', 'med_owner_cost/income_no_mortgage',
+            'num_in_shelters', 'num_homeless', 'pct_foreign_born', 'pct_born_same_state', 'pct_same_city_5_years', 'pct_same_city_5_years',
+            'pct_same_state_5_years', 'full_time_cops', 'full_time_cops/100k', 'cops_in_field_ops', 'cops_in_field_ops/100k','tot_requests_for_police',
+            'total_requests_for_police/100k', 'total_requests_for_police/officer', 'cops/100k', 'racial_match_pop_cops', 'pct_cops_white',
+            'pct_cops_black', 'pct_cops_hisp', 'pct_cops_asian', 'pct_cops_minority', 'cops_drug_unit', 'num_kinds_drugs_seized', 'cops_avg_OT',
+            'land_area_miles^2', 'ppl/mile^2', 'pct_ppl_use_transit_commute', 'num_police_cars', 'police_budget', 'pct_sworn_cops',
+            'gang_unit', 'pct_cops_assigned_drug_unit', 'cop_budget_per_pop', 'violent_crime_100k')
+```
+
+Setting the working directory and loading the .txt file:
+
+```{r}
+setwd('/')
+
+crime = read.table('/Users/brendan/Desktop/Personal R Projects/Communities and Crime Rate/communities.txt', sep = ',', na.strings = c('?', ''), col.names = columns)
+```
+
+'fold' is non-predictive and 'pct_employ_manuf' is duplicated. There is also no description of the state numbers. We will remove these three columns:
+
+```{r}
+crime = crime[, -c(1, 5, 42)]
+```
+
+Checking the structure: 1, 2 are 'int', 3 is 'factor'. Everything else is numeric.
+
+```{r}
+str(crime)
+```
+
+There are 1675 rows with missing values, but only 1994 rows. We therefore can't delete observations, but we also can't impute the mean.
+
+```{r}
+sum(complete.cases(crime)) # 123 complete cases. We'll have to remove the columns.
+sapply(crime, function (x) sum(is.na(x)))
+```
+
+Removing 25 columns:
+
+```{r}
+keep = sapply(crime, function (x) !any(is.na(x)))
+crime = crime[, keep]
+```
+
+Now there are no missing values!
+
+```{r}
+sum(is.na(crime))
+```
+
+# Initial Exploration and Feature Selection
+
+Excluding 'community_name' and 'crime_per_100k' for correlation calculation:
+
+```{r}
+correlations = cor(crime[-c(1, 100)], crime[100])
+hist(correlations, breaks = 50)
+```
+
+To re-include 'community_name' and 'crime_per_100k' for the next step:
+
+```{r}
+correlations = c(1, correlations, 1)
+```
+
+Only keeping columns that have a correlation with the class variable greater than 0.3:
+
+```{r}
+crime_important = crime[, correlations > 0.3]
+str(crime_important)
+```
+
+Correlation of everything but factor variable with the class variable:
+
+```{r}
+new_correlations = cor(crime_important[-c(1, 29)], crime_important[29])
+
+# corrplot(new_correlations) # Single row
+# corrplot(cor(crime_important[-1])) # Matrix
+```
+
+Rename to 'crime' for simplicity and remove the only non-numeric column:
+
+```{r}
+crime = crime_important[-1]
+cor(crime[-28], crime[28])
+
+hist(crime$violent_crime_100k)
+boxplot(crime$violent_crime_100k)
+```
+
+# Partitioning
+
+Using a 70% training set partition:
+
+```{r}
+set.seed(7)
+index = sample(nrow(crime), 0.7 * nrow(crime))
+train = crime[index,]
+test = crime[-index,]
+train_labels = train[, 28] # for kNN
+test_labels = test[, 28] # for kNN
+```
+
+Creating a function to predict RMSE:
+
+```{r}
+my_rmse = function (predicted, actual) return(sqrt(mean((predicted - actual)^2)))
+```
+
+# Linear Regression
+
+RMSE: 0.1329, R-squared: 0.6807, adjusted R-squared: 0.6744
+
+```{r}
+linear_model = lm(violent_crime_100k ~ ., data = train)
+summary(linear_model)
+```
+
+Most important features are:
+
+'pct_black'
+'pct_kids_to_unmarried'
+'num_vacant_households'
+'pct_ppl_dense_housing'
+'pct_with_pub_assist'
+'num_homeless'
+'pct_less_9th_grade'
+'population'
+'pct_no_hs'
+
+```{r}
+varImp(linear_model)
+
+linear_pred = predict(linear_model, test)
+```
+
+RMSE: 0.1479
+
+```{r}
+my_rmse(linear_pred, test$violent_crime_100k)
+
+plot(linear_model)
+```
+
+# KNN Regression
+
+```{r}
+knn_model = knnregTrain(train[-28], test[-28], train_labels, 10)
+```
+
+RMSE: 0.1519
+
+```{r}
+my_rmse(knn_model, test_labels)
+```
+
+# Decision Tree
+
+```{r}
+tree_model = rpart(violent_crime_100k ~ ., data = train)
+```
+
+Let's take a look at the tree that was generated:
+
+```{r}
+# plot(tree_model) 
+# text(tree_model, use.n = 0, cex = 0.8)
+```
+
+RMSE: 0.1703
+
+```{r}
+tree_pred = predict(tree_model, test)
+my_rmse(tree_pred, test_labels)
+```
+
+# Random Forest
+
+```{r}
+random_forest_model = randomForest(violent_crime_100k ~ ., data = train)
+random_forest_pred = predict(random_forest_model, test)
+```
+
+RMSE: 0.1444
+
+```{r}
+my_rmse(random_forest_pred, test_labels)
+```
+
+# Support Vector Machine
+
+```{r}
+svm_model = svm(violent_crime_100k ~ ., data = train)
+svm_pred = predict(svm_model, newdata = test)
+```
+
+RMSE: 0.1447
+
+```{r}
+my_rmse(svm_pred, test_labels)
+```
+
+# Neural Net
+
+```{r}
+neural_vars = c('pct_black', 'pct_kids_to_unmarried', 'num_vacant_households',
+                'pct_ppl_dense_housing', 'pct_with_pub_assist', 'num_homeless',
+                'pct_less_9th_gr', 'population', 'pct_no_hs', 'violent_crime_100k')
+
+neural_train = train[, neural_vars]
+neural_test = test[, neural_vars]
+```
+
+Creating a neural network model using the variables that are most correlated to the class variable:
+
+```{r}
+nn_model = neuralnet(violent_crime_100k ~ pct_black + pct_kids_to_unmarried + num_vacant_households +
+                                          pct_ppl_dense_housing + pct_with_pub_assist +
+                                          num_homeless + pct_less_9th_gr + population + 
+                                          pct_no_hs, data = neural_train)
+```
+
+Cannot have class variable here:
+
+```{r}
+nn_pred = compute(nn_model, neural_test[-10])
+```
+
+RMSE: 0.1521
+
+```{r}
+my_rmse(nn_pred$net.result, neural_test$violent_crime_100k)
+```
+
+Overall, the linear regression model worked the best, with the lowest RMSE value of 0.1329
