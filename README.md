@@ -1,6 +1,6 @@
 # Communities-and-Crime-Rate
 
-I analyzed crime data set with 128 features to identify which ones most led to high crime rates in various American counties.
+I analyzed a crime data set with 128 features to identify which ones most led to high crime rates in various American counties.
 
 Almost all features were numeric, and normalized.
 
